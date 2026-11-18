@@ -1,0 +1,102 @@
+"""
+CLI for PCA and model-free changepoint analysis.
+"""
+
+import click
+from moseq2_pca.util import command_with_config, combine_new_config
+from moseq2_pca.helpers.wrappers import (train_pca_wrapper, apply_pca_wrapper,
+                                         compute_changepoints_wrapper,
+                                         clip_scores_wrapper)
+from moseq2_pca.cli_spec import (COMMON_PCA_OPTIONS, DASK_PARAMETERS,
+                               PCA_TRAIN_OPTIONS, option_spec)
+
+
+common_pca_options = option_spec(COMMON_PCA_OPTIONS)
+common_dask_parameters = option_spec(DASK_PARAMETERS)
+common_pca_train_options = option_spec(PCA_TRAIN_OPTIONS)
+
+
+@click.group(context_settings=dict(show_default=True))
+@click.version_option()
+def cli():
+    """MoSeq2 PCA: PCA and model-free changepoint analysis."""
+    pass
+
+
+@cli.command(name='train-pca', cls=command_with_config('config_file'), help='Train PCA on all extracted results (h5 files) in input directory')
+@common_pca_options
+@common_dask_parameters
+@common_pca_train_options
+@click.option('--output-file', default='pca', type=str, help='Name of h5 file for storing pca results')
+@click.option('--local-processes', default=False, type=bool, help='Used with a local cluster. If True: use processes, If False: use threads')
+@click.option('--overwrite-pca-train', default=False, type=bool, help='Used to bypass the pca overwrite question. If True: skip question, run automatically')
+@click.option('--camera-type', default='k2', type=str, help='specify the camera type (k2 or azure), default is k2')
+def train_pca(input_dir, output_dir, output_file, **cli_args):
+    # function writes output pca path to config_data
+    if cli_args.get('camera_type') == 'azure':
+        # check if parameters are set to k2 default, change to azure default
+        click.echo('Updating parameters for Azure Kinect camera...')
+        if cli_args['gaussfilter_space'] == (1.5, 1):
+            cli_args['gaussfilter_space'] = (2.25, 1.5)
+        if cli_args['tailfilter_size'] == (9, 9):
+            cli_args['tailfilter_size'] = (15, 15)
+
+    config_data = train_pca_wrapper(input_dir, cli_args, output_dir, output_file)
+    # write config_data to config_file if there is one
+    if cli_args.get('config_file'):
+        # combine new config with old config to add output pca path to config.yaml
+        combine_new_config(cli_args.get('config_file'), config_data)
+
+
+@cli.command(name='apply-pca', cls=command_with_config('config_file'), help='Compute PCA Scores of extraction data given a pre-trained PCA')
+@common_pca_options
+@common_dask_parameters
+@click.option('--output-file', default='pca_scores', type=str, help='Name of h5 file for storing pca results')
+@click.option('--pca-path', default='/components', type=str, help='Path to pca components in h5 file')
+@click.option('--pca-file', default=None, type=click.Path(), help='Path to PCA results')
+@click.option('--fill-gaps', default=True, type=bool, help='Fill dropped frames with nans')
+@click.option('--fps', default=30, type=int, help='Frames per second (frame rate)')
+@click.option('--detrend-window', default=0, type=float, help="Length of detrend window (in seconds, 0 for no detrending)")
+@click.option('--overwrite-pca-apply', default=False, type=bool, help='Used to bypass the pca overwrite question. If True: skip question, run automatically')
+def apply_pca(input_dir, output_dir, output_file, **cli_args):
+    # function writes output pc score path to config_data
+    config_data = apply_pca_wrapper(input_dir, cli_args, output_dir, output_file)
+    # write config_data to config_file if there is one
+    if cli_args.get('config_file'):
+        # combine new config with old config to add output pc score path to config.yaml
+        combine_new_config(cli_args.get('config_file'), config_data)
+        
+
+@cli.command('compute-changepoints', cls=command_with_config('config_file'), help='Compute the Model-Free Syllable Changepoints based on the PCA/PCA_Scores')
+@common_pca_options
+@common_dask_parameters
+@click.option('--output-file', default='changepoints', type=str, help='Name of h5 file for storing pca results')
+@click.option('--pca-file-components', type=click.Path(), default=None, help="Path to PCA components")
+@click.option('--pca-file-scores', type=click.Path(), default=None, help='Path to PCA results')
+@click.option('--pca-path', default='/components', type=str, help='Path to pca components')
+@click.option('--neighbors', type=int, default=1, help="Neighbors to use for peak identification")
+@click.option('--threshold', type=float, default=.5, help="Peak threshold to use for changepoints")
+@click.option('-k', '--klags', type=int, default=6, help="Lag to use for derivative calculation")
+@click.option('-s', '--sigma', type=float, default=3.5, help="Standard deviation of gaussian smoothing filter")
+@click.option('-d', '--dims', type=int, default=300, help="Number of random projections to use")
+@click.option('--fps', default=30, type=int, help="Frames per second (frame rate)")
+def compute_changepoints(input_dir, output_dir, output_file, **cli_args):
+    # function writes output changepoint path to config_data
+    config_data = compute_changepoints_wrapper(input_dir, cli_args, output_dir, output_file)
+    # write config_data to config_file if there is one
+    if cli_args.get('config_file'):
+        # combine new config with old config to add output changepoint path to config.yaml
+        combine_new_config(cli_args.get('config_file'), config_data)
+
+
+@cli.command('clip-scores', help='Clip specified number of frames from PCA scores at the beginning or end')
+@click.argument('pca_file', type=click.Path(exists=True, resolve_path=True))
+@click.argument('clip_samples', type=int)
+@click.option('--from-end', type=bool, is_flag=True, help="if true clip from end rather than beginning")
+def clip_scores(pca_file, clip_samples, from_end):
+    new_file = clip_scores_wrapper(pca_file, clip_samples, from_end)
+    print(f"Clipped scores written to {new_file}")
+
+
+if __name__ == '__main__':
+    cli()

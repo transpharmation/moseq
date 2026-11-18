@@ -1,0 +1,121 @@
+import os
+from pathlib import Path
+import numpy as np
+import numpy.testing as npt
+from unittest import TestCase
+from moseq2_extract.io.video import (
+    read_frames_raw,
+    get_raw_info,
+    encode_depth_to_avi,
+    encode_depth_to_avi_batch,
+    get_movie_info,
+    get_avi_metadata,
+    write_frames_preview,
+    open_video_writer,
+    avi_reader,
+)
+
+
+class TestVideoIO(TestCase):
+    def test_read_frames_raw(self):
+
+        data_path = "data/fake_depth.dat"
+
+        test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
+        test_data.tofile(data_path)
+
+        read_data = np.array(list(read_frames_raw(data_path)))
+        npt.assert_array_equal(test_data, read_data)
+        os.remove(data_path)
+
+    def test_get_raw_info(self):
+
+        data_path = "data/fake_raw_depth.dat"
+
+        test_data = np.random.randint(0, 256, size=(100, 424, 512), dtype="int16")
+        test_data.tofile(data_path)
+
+        vid_info = get_raw_info(data_path)
+
+        npt.assert_equal(vid_info["bytes"], test_data.nbytes)
+        npt.assert_equal(vid_info["nframes"], test_data.shape[0])
+        npt.assert_equal(vid_info["dims"], (test_data.shape[2], test_data.shape[1]))
+        npt.assert_equal(
+            vid_info["bytes_per_frame"], test_data.nbytes / test_data.shape[0]
+        )
+        os.remove(data_path)
+
+    def test_ffv1(self):
+
+        data_path = "data/fake_ffv1_depth.avi"
+
+        test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
+
+        with encode_depth_to_avi(
+            data_path,
+            fps=30,
+            height=test_data.shape[1],
+            width=test_data.shape[2],
+        ) as writer:
+            encode_depth_to_avi_batch(test_data, writer)
+
+        read_data = np.array(list(avi_reader(data_path)))
+
+        vid_info = get_movie_info(data_path)
+
+        npt.assert_equal(test_data, read_data)
+        npt.assert_equal(vid_info["fps"], 30)
+        npt.assert_equal((vid_info["dims"]), (test_data.shape[2], test_data.shape[1]))
+        npt.assert_equal(vid_info["nframes"], test_data.shape[0])
+        os.remove(data_path)
+
+    def test_write_frames_preview(self):
+
+        data_path = "data/fake_preview_depth.mp4"
+
+        test_data = np.random.randint(0, 256, size=(30, 424, 512), dtype="int16")
+        with open_video_writer(data_path, 30, 10, 120) as write_fun:
+            write_frames_preview(test_data, write_fun, frame_range=range(len(test_data)))
+
+        vid_info = get_avi_metadata(Path(data_path))
+        # preview dimensions must match the frames (even sizes pass through)
+        npt.assert_equal(vid_info["dims"], (512, 424))
+        os.remove(data_path)
+
+    def test_write_frames_preview_odd_dims_padded(self):
+
+        data_path = "data/fake_preview_odd_depth.mp4"
+
+        # odd dimensions must be padded to even (yuv420p requirement),
+        # matching the release-era ffmpeg-pipe writer behavior
+        test_data = np.random.randint(0, 256, size=(5, 505, 521), dtype="int16")
+        with open_video_writer(data_path, 30, 10, 120) as write_fun:
+            write_frames_preview(test_data, write_fun, frame_range=range(len(test_data)))
+
+        vid_info = get_avi_metadata(Path(data_path))
+        npt.assert_equal(vid_info["dims"], (522, 506))
+        os.remove(data_path)
+
+    def test_get_movie_info(self):
+
+        avi_path = "data/fake_movie_info.avi"
+        dat_path = "data/fake_movie_info.dat"
+
+        test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
+
+        with encode_depth_to_avi(
+            avi_path,
+            fps=30,
+            height=test_data.shape[1],
+            width=test_data.shape[2],
+        ) as writer:
+            encode_depth_to_avi_batch(test_data, writer)
+        test_data.tofile(dat_path)
+
+        vid_info = get_movie_info(avi_path)
+        raw_info = get_movie_info(dat_path)
+
+        npt.assert_equal(vid_info["dims"], raw_info["dims"])
+        npt.assert_equal(vid_info["nframes"], raw_info["nframes"])
+        os.remove(avi_path)
+        os.remove(dat_path)

@@ -1,0 +1,12 @@
+pyyaml
+ruamel.yaml
+click
+h5py
+joblib
+numpy
+toolz
+seaborn
+scikit-learn
+scipy
+pandas
+tqdm
